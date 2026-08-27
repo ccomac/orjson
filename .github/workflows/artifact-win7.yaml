@@ -84,9 +84,6 @@ jobs:
           }
 
           Write-Host "Using CPython import library: $pythonImportLib"
-          "PYO3_CROSS_LIB_DIR=$pythonLibDir" >> $env:GITHUB_ENV
-          "PYO3_CROSS_PYTHON_VERSION=${{ inputs.interpreter }}" >> $env:GITHUB_ENV
-          "PYO3_CROSS_PYTHON_IMPLEMENTATION=CPython" >> $env:GITHUB_ENV
           "LIB=$pythonLibDir;$env:LIB" >> $env:GITHUB_ENV
 
           New-Item -ItemType Directory -Path .cargo -Force | Out-Null
