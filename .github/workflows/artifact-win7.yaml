@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: MPL-2.0
+
+name: Build orjson wheel for Windows 7
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "ijl/orjson git tag, branch, or commit"
+        required: true
+        default: "master"
+      interpreter:
+        description: "CPython version to build for; it must match the target Python minor version"
+        required: true
+        default: "3.12"
+
+env:
+  FORCE_COLOR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RUST_TOOLCHAIN: nightly-2026-08-01
+  RUST_TARGET: x86_64-win7-windows-msvc
+  RUSTUP_TERM_PROGRESS_WHEN: never
+
+jobs:
+  win7-x64:
+    name: orjson / Windows 7 x64 / Python ${{ inputs.interpreter }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CFLAGS: "-O2"
+      LDFLAGS: "-Wl,--as-needed"
+      RUSTFLAGS: >-
+        -Z unstable-options
+        -C panic=immediate-abort
+        -Z mir-opt-level=4
+        -D warnings
+
+    steps:
+      - name: Check out orjson
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ijl/orjson
+          ref: ${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Set up CPython
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          allow-prereleases: true
+          python-version: ${{ inputs.interpreter }}
+          architecture: x64
+
+      # The Win7 Tier 3 target has no prebuilt standard library or rustup target.
+      - name: Set up Rust nightly and standard-library sources
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rust-src
+
+      - name: Verify the Rust target
+        shell: pwsh
+        run: |
+          rustc --version --verbose
+          $cfg = @(rustc --print cfg --target $env:RUST_TARGET)
+          if ($cfg -notcontains 'target_vendor="win7"') {
+            throw "Rust target '$env:RUST_TARGET' is unavailable or is not the Win7 target."
+          }
+
+      - name: Prepare the official orjson build environment
+        shell: pwsh
+        run: |
+          python.exe -m pip install --upgrade pip maturin wheel
+          python.exe -m pip install -r test\requirements.txt
+          New-Item -ItemType Directory -Path .cargo -Force | Out-Null
+          Copy-Item -LiteralPath ci\config.toml -Destination .cargo\config.toml -Force
+
+      - name: Build the Windows 7 wheel
+        shell: pwsh
+        run: >-
+          maturin.exe build
+          --release
+          --strip
+          --features="avx512,no_panic,optimize"
+          --interpreter python.exe
+          --target=$env:RUST_TARGET
+
+      - name: Verify the wheel ABI and install it
+        shell: pwsh
+        run: |
+          $abi = "cp${{ inputs.interpreter }}".Replace(".", "")
+          $wheels = @(Get-ChildItem -LiteralPath target\wheels -Filter *.whl)
+
+          if ($wheels.Count -ne 1) {
+            throw "Expected exactly one wheel in target/wheels, found $($wheels.Count)."
+          }
+
+          $expectedSuffix = "-$abi-$abi-win_amd64.whl"
+          if (-not $wheels[0].Name.EndsWith($expectedSuffix)) {
+            throw "Expected a wheel ending in '$expectedSuffix', got '$($wheels[0].Name)'."
+          }
+
+          $wheels[0] | Format-Table Name,Length
+          python.exe -m pip install --force-reinstall --no-deps $wheels[0].FullName
+          python.exe -c "import orjson; print(orjson.__version__); print(orjson.dumps({'win7': True}))"
+
+      - name: Run orjson tests
+        shell: pwsh
+        run: python.exe -m pytest -s -rxX -v test
+        env:
+          PYTHONMALLOC: debug
+
+      - name: Upload orjson wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orjson-win7-x64-py${{ inputs.interpreter }}
+          path: target/wheels/*.whl
+          overwrite: true
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
