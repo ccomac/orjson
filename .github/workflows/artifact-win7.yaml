@@ -84,7 +84,7 @@ jobs:
           --release
           --strip
           --features="avx512,no_panic,optimize"
-          --interpreter python.exe
+          --interpreter=${{ inputs.interpreter }}
           --target=$env:RUST_TARGET
 
       - name: Verify the wheel ABI and install it
