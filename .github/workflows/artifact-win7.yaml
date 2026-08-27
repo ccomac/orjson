@@ -74,6 +74,21 @@ jobs:
         run: |
           python.exe -m pip install --upgrade pip maturin wheel
           python.exe -m pip install -r test\requirements.txt
+
+          $pythonLibDir = Join-Path $env:pythonLocation "libs"
+          $pythonAbi = "${{ inputs.interpreter }}".Replace(".", "")
+          $pythonImportLib = Join-Path $pythonLibDir "python$pythonAbi.lib"
+
+          if (-not (Test-Path -LiteralPath $pythonImportLib -PathType Leaf)) {
+            throw "CPython import library was not found at '$pythonImportLib'."
+          }
+
+          Write-Host "Using CPython import library: $pythonImportLib"
+          "PYO3_CROSS_LIB_DIR=$pythonLibDir" >> $env:GITHUB_ENV
+          "PYO3_CROSS_PYTHON_VERSION=${{ inputs.interpreter }}" >> $env:GITHUB_ENV
+          "PYO3_CROSS_PYTHON_IMPLEMENTATION=CPython" >> $env:GITHUB_ENV
+          "LIB=$pythonLibDir;$env:LIB" >> $env:GITHUB_ENV
+
           New-Item -ItemType Directory -Path .cargo -Force | Out-Null
           Copy-Item -LiteralPath ci\config.toml -Destination .cargo\config.toml -Force
 
