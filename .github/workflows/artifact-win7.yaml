@@ -11,7 +11,7 @@ on:
       version:
         description: "ijl/orjson git tag, branch, or commit"
         required: true
-        default: "master"
+        default: "3.13.0"
       interpreter:
         description: "CPython version to build for; it must match the target Python minor version"
         required: true
@@ -20,18 +20,19 @@ on:
 env:
   FORCE_COLOR: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  RUST_TOOLCHAIN: nightly-2026-08-01
+  RUST_TOOLCHAIN: nightly-2026-10-01
   RUST_TARGET: x86_64-win7-windows-msvc
   RUSTUP_TERM_PROGRESS_WHEN: never
 
 jobs:
   win7-x64:
     name: orjson / Windows 7 x64 / Python ${{ inputs.interpreter }}
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     timeout-minutes: 30
     env:
       CFLAGS: "-O2"
       LDFLAGS: "-Wl,--as-needed"
+      PYO3_USE_RAW_DYLIB: "0"
       RUSTFLAGS: >-
         -Z unstable-options
         -C panic=immediate-abort
@@ -47,7 +48,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up CPython
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           allow-prereleases: true
           python-version: ${{ inputs.interpreter }}
@@ -55,7 +56,7 @@ jobs:
 
       # The Win7 Tier 3 target has no prebuilt standard library or rustup target.
       - name: Set up Rust nightly and standard-library sources
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rust-src
@@ -69,10 +70,33 @@ jobs:
             throw "Rust target '$env:RUST_TARGET' is unavailable or is not the Win7 target."
           }
 
+      - name: Verify the orjson version
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata `
+            --format-version 1 `
+            --no-deps `
+            --locked `
+            --quiet | ConvertFrom-Json
+          $packages = @($metadata.packages | Where-Object name -eq "orjson")
+
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one orjson package, found $($packages.Count)."
+          }
+
+          $orjsonVersion = $packages[0].version
+          $sourceRef = "${{ inputs.version }}"
+          if ($sourceRef -match '^\d+\.\d+\.\d+$' -and $orjsonVersion -ne $sourceRef) {
+            throw "Ref '$sourceRef' contains orjson $orjsonVersion."
+          }
+
+          Write-Host "Building orjson $orjsonVersion"
+          "ORJSON_VERSION=$orjsonVersion" >> $env:GITHUB_ENV
+
       - name: Prepare the official orjson build environment
         shell: pwsh
         run: |
-          python.exe -m pip install --upgrade pip maturin wheel
+          python.exe -m pip install --upgrade pip "maturin>=1,<2" wheel
           python.exe -m pip install -r test\requirements.txt
 
           $pythonLibDir = Join-Path $env:pythonLocation "libs"
@@ -95,7 +119,7 @@ jobs:
           maturin.exe build
           --release
           --strip
-          --features="avx512,no_panic,optimize"
+          --features="avx512,nightly"
           --interpreter=${{ inputs.interpreter }}
           --target=$env:RUST_TARGET
 
@@ -116,7 +140,9 @@ jobs:
 
           $wheels[0] | Format-Table Name,Length
           python.exe -m pip install --force-reinstall --no-deps $wheels[0].FullName
-          python.exe -c "import orjson; print(orjson.__version__); print(orjson.dumps({'win7': True}))"
+          python.exe -c "import os, orjson; print(orjson.__version__); print(orjson.dumps({'win7': True})); assert orjson.__version__ == os.environ['EXPECTED_ORJSON_VERSION']"
+        env:
+          EXPECTED_ORJSON_VERSION: ${{ env.ORJSON_VERSION }}
 
       - name: Run orjson tests
         shell: pwsh
@@ -125,9 +151,9 @@ jobs:
           PYTHONMALLOC: debug
 
       - name: Upload orjson wheel
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: orjson-win7-x64-py${{ inputs.interpreter }}
+          name: orjson-${{ env.ORJSON_VERSION }}-win7-x64-py${{ inputs.interpreter }}
           path: target/wheels/*.whl
           overwrite: true
           retention-days: 7
